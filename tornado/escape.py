@@ -20,41 +20,45 @@ Also includes a few other miscellaneous string manipulation functions that
 have crept in over time.
 """
 
-from __future__ import absolute_import, division, print_function, with_statement
-
-import re
-import sys
-
-from tornado.util import bytes_type, unicode_type, basestring_type, u
-
-try:
-    from urllib.parse import parse_qs as _parse_qs  # py3
-except ImportError:
-    from urlparse import parse_qs as _parse_qs  # Python 2.6+
-
-try:
-    import htmlentitydefs  # py2
-except ImportError:
-    import html.entities as htmlentitydefs  # py3
-
-try:
-    import urllib.parse as urllib_parse  # py3
-except ImportError:
-    import urllib as urllib_parse  # py2
+from __future__ import absolute_import, division, print_function
 
 import json
+import re
+
+from tornado.util import PY3, unicode_type, basestring_type
+
+if PY3:
+    from urllib.parse import parse_qs as _parse_qs
+    import html.entities as htmlentitydefs
+    import urllib.parse as urllib_parse
+    unichr = chr
+else:
+    from urlparse import parse_qs as _parse_qs
+    import htmlentitydefs
+    import urllib as urllib_parse
 
 try:
-    unichr
-except NameError:
-    unichr = chr
+    import typing  # noqa
+except ImportError:
+    pass
 
-_XHTML_ESCAPE_RE = re.compile('[&<>"]')
-_XHTML_ESCAPE_DICT = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}
+
+_XHTML_ESCAPE_RE = re.compile('[&<>"\']')
+_XHTML_ESCAPE_DICT = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
+                      '\'': '&#39;'}
 
 
 def xhtml_escape(value):
-    """Escapes a string so it is valid within HTML or XML."""
+    """Escapes a string so it is valid within HTML or XML.
+
+    Escapes the characters ``<``, ``>``, ``"``, ``'``, and ``&``.
+    When used in attribute values the escaped strings must be enclosed
+    in quotes.
+
+    .. versionchanged:: 3.2
+
+       Added the single quote to the list of escaped characters.
+    """
     return _XHTML_ESCAPE_RE.sub(lambda match: _XHTML_ESCAPE_DICT[match.group(0)],
                                 to_basestring(value))
 
@@ -64,12 +68,15 @@ def xhtml_unescape(value):
     return re.sub(r"&(#?)(\w+?);", _convert_entity, _unicode(value))
 
 
+# The fact that json_encode wraps json.dumps is an implementation detail.
+# Please see https://github.com/tornadoweb/tornado/pull/706
+# before sending a pull request that adds **kwargs to this function.
 def json_encode(value):
     """JSON-encodes the given Python object."""
     # JSON permits but does not require forward slashes to be escaped.
     # This is useful when json data is emitted in a <script> tag
     # in HTML, as it prevents </script> tags from prematurely terminating
-    # the javscript.  Some json libraries do this escaping by default,
+    # the javascript.  Some json libraries do this escaping by default,
     # although python's standard library does not, so we do it here.
     # http://stackoverflow.com/questions/1580647/json-why-are-forward-slashes-escaped
     return json.dumps(value).replace("</", "<\\/")
@@ -85,41 +92,76 @@ def squeeze(value):
     return re.sub(r"[\x00-\x20]+", " ", value).strip()
 
 
-def url_escape(value):
-    """Returns a URL-encoded version of the given value."""
-    return urllib_parse.quote_plus(utf8(value))
+def url_escape(value, plus=True):
+    """Returns a URL-encoded version of the given value.
+
+    If ``plus`` is true (the default), spaces will be represented
+    as "+" instead of "%20".  This is appropriate for query strings
+    but not for the path component of a URL.  Note that this default
+    is the reverse of Python's urllib module.
+
+    .. versionadded:: 3.1
+        The ``plus`` argument
+    """
+    quote = urllib_parse.quote_plus if plus else urllib_parse.quote
+    return quote(utf8(value))
+
 
 # python 3 changed things around enough that we need two separate
 # implementations of url_unescape.  We also need our own implementation
 # of parse_qs since python 3's version insists on decoding everything.
-if sys.version_info[0] < 3:
-    def url_unescape(value, encoding='utf-8'):
+if not PY3:
+    def url_unescape(value, encoding='utf-8', plus=True):
         """Decodes the given value from a URL.
 
         The argument may be either a byte or unicode string.
 
         If encoding is None, the result will be a byte string.  Otherwise,
         the result is a unicode string in the specified encoding.
+
+        If ``plus`` is true (the default), plus signs will be interpreted
+        as spaces (literal plus signs must be represented as "%2B").  This
+        is appropriate for query strings and form-encoded values but not
+        for the path component of a URL.  Note that this default is the
+        reverse of Python's urllib module.
+
+        .. versionadded:: 3.1
+           The ``plus`` argument
         """
+        unquote = (urllib_parse.unquote_plus if plus else urllib_parse.unquote)
         if encoding is None:
-            return urllib_parse.unquote_plus(utf8(value))
+            return unquote(utf8(value))
         else:
-            return unicode_type(urllib_parse.unquote_plus(utf8(value)), encoding)
+            return unicode_type(unquote(utf8(value)), encoding)
 
     parse_qs_bytes = _parse_qs
 else:
-    def url_unescape(value, encoding='utf-8'):
+    def url_unescape(value, encoding='utf-8', plus=True):
         """Decodes the given value from a URL.
 
         The argument may be either a byte or unicode string.
 
         If encoding is None, the result will be a byte string.  Otherwise,
         the result is a unicode string in the specified encoding.
+
+        If ``plus`` is true (the default), plus signs will be interpreted
+        as spaces (literal plus signs must be represented as "%2B").  This
+        is appropriate for query strings and form-encoded values but not
+        for the path component of a URL.  Note that this default is the
+        reverse of Python's urllib module.
+
+        .. versionadded:: 3.1
+           The ``plus`` argument
         """
         if encoding is None:
+            if plus:
+                # unquote_to_bytes doesn't have a _plus variant
+                value = to_basestring(value).replace('+', ' ')
             return urllib_parse.unquote_to_bytes(value)
         else:
-            return urllib_parse.unquote_plus(to_basestring(value), encoding=encoding)
+            unquote = (urllib_parse.unquote_plus if plus
+                       else urllib_parse.unquote)
+            return unquote(to_basestring(value), encoding=encoding)
 
     def parse_qs_bytes(qs, keep_blank_values=False, strict_parsing=False):
         """Parses a query string like urlparse.parse_qs, but returns the
@@ -139,10 +181,11 @@ else:
         return encoded
 
 
-_UTF8_TYPES = (bytes_type, type(None))
+_UTF8_TYPES = (bytes, type(None))
 
 
 def utf8(value):
+    # type: (typing.Union[bytes,unicode_type,None])->typing.Union[bytes,None]
     """Converts a string argument to a byte string.
 
     If the argument is already a byte string or None, it is returned unchanged.
@@ -150,8 +193,12 @@ def utf8(value):
     """
     if isinstance(value, _UTF8_TYPES):
         return value
-    assert isinstance(value, unicode_type)
+    if not isinstance(value, unicode_type):
+        raise TypeError(
+            "Expected bytes, unicode, or None; got %r" % type(value)
+        )
     return value.encode("utf-8")
+
 
 _TO_UNICODE_TYPES = (unicode_type, type(None))
 
@@ -164,8 +211,12 @@ def to_unicode(value):
     """
     if isinstance(value, _TO_UNICODE_TYPES):
         return value
-    assert isinstance(value, bytes_type)
+    if not isinstance(value, bytes):
+        raise TypeError(
+            "Expected bytes, unicode, or None; got %r" % type(value)
+        )
     return value.decode("utf-8")
+
 
 # to_unicode was previously named _unicode not because it was private,
 # but to avoid conflicts with the built-in unicode() function/type
@@ -192,7 +243,10 @@ def to_basestring(value):
     """
     if isinstance(value, _BASESTRING_TYPES):
         return value
-    assert isinstance(value, bytes_type)
+    if not isinstance(value, bytes):
+        raise TypeError(
+            "Expected bytes, unicode, or None; got %r" % type(value)
+        )
     return value.decode("utf-8")
 
 
@@ -207,10 +261,11 @@ def recursive_unicode(obj):
         return list(recursive_unicode(i) for i in obj)
     elif isinstance(obj, tuple):
         return tuple(recursive_unicode(i) for i in obj)
-    elif isinstance(obj, bytes_type):
+    elif isinstance(obj, bytes):
         return to_unicode(obj)
     else:
         return obj
+
 
 # I originally used the regex from
 # http://daringfireball.net/2010/07/improved_regex_for_matching_urls
@@ -309,7 +364,7 @@ def linkify(text, shorten=False, extra_params="",
                     # have a status bar, such as Safari by default)
                     params += ' title="%s"' % href
 
-        return u('<a href="%s"%s>%s</a>') % (href, params, url)
+        return u'<a href="%s"%s>%s</a>' % (href, params, url)
 
     # First HTML-escape so that our strings are all safe.
     # The regex is modified to avoid character entites other than &amp; so
@@ -321,7 +376,10 @@ def linkify(text, shorten=False, extra_params="",
 def _convert_entity(m):
     if m.group(1) == "#":
         try:
-            return unichr(int(m.group(2)))
+            if m.group(2)[:1].lower() == 'x':
+                return unichr(int(m.group(2)[1:], 16))
+            else:
+                return unichr(int(m.group(2)))
         except ValueError:
             return "&#%s;" % m.group(2)
     try:
@@ -335,5 +393,6 @@ def _build_unicode_map():
     for name, value in htmlentitydefs.name2codepoint.items():
         unicode_map[name] = unichr(value)
     return unicode_map
+
 
 _HTML_UNICODE_MAP = _build_unicode_map()

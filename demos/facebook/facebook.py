@@ -25,10 +25,8 @@ import tornado.web
 from tornado.options import define, options
 
 define("port", default=8888, help="run on the given port", type=int)
-define("facebook_api_key", help="your Facebook application API key",
-       default="9e2ada1b462142c4dfcc8e894ea1e37c")
-define("facebook_secret", help="your Facebook application secret",
-       default="32fc6114554e3c53d5952594510021e2")
+define("facebook_api_key", help="your Facebook application API key", type=str)
+define("facebook_secret", help="your Facebook application secret", type=str)
 
 
 class Application(tornado.web.Application):
@@ -91,7 +89,7 @@ class AuthLoginHandler(BaseHandler, tornado.auth.FacebookGraphMixin):
             return
         self.authorize_redirect(redirect_uri=my_url,
                                 client_id=self.settings["facebook_api_key"],
-                                extra_params={"scope": "read_stream"})
+                                extra_params={"scope": "user_posts"})
 
     def _on_auth(self, user):
         if not user:
@@ -113,9 +111,12 @@ class PostModule(tornado.web.UIModule):
 
 def main():
     tornado.options.parse_command_line()
+    if not (options.facebook_api_key and options.facebook_secret):
+        print("--facebook_api_key and --facebook_secret must be set")
+        return
     http_server = tornado.httpserver.HTTPServer(Application())
     http_server.listen(options.port)
-    tornado.ioloop.IOLoop.instance().start()
+    tornado.ioloop.IOLoop.current().start()
 
 
 if __name__ == "__main__":
